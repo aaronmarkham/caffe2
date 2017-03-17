@@ -1,4 +1,4 @@
-// Implementes the math functions for CPU.
+// Implements the math functions for CPU.
 // The implementation in this file allows us to route the underlying numerical
 // computation library to different backends. Notably:
 // (1) For all BLAS-related functions, one can explicitly request a BLAS backend
@@ -206,16 +206,10 @@ void Gemv<float, CPUContext>(
 }
 
 #define CAFFE2_SPECIALIZED_SCALE(T)                                         \
-  namespace detail {                                                        \
   template <>                                                               \
-  void ScaleDynamic<T, CPUContext>(                                         \
-      const int n,                                                          \
-      const T alpha,                                                        \
-      const T* x,                                                           \
-      T* y,                                                                 \
-      CPUContext* context) {                                                \
+  void Scale<T, CPUContext>(                                                \
+      const int n, const T alpha, const T* x, T* y, CPUContext* context) {  \
     EigenVectorMap<T>(y, n) = ConstEigenVectorMap<T>(x, n) * alpha;         \
-  }                                                                         \
   }                                                                         \
   template <>                                                               \
   void Scale<T, CPUContext>(                                                \
@@ -238,16 +232,10 @@ CAFFE2_SPECIALIZED_DOT(double)
 #undef CAFFE2_SPECIALIZED_DOT
 
 #define CAFFE2_SPECIALIZED_AXPY(T)                                          \
-  namespace detail {                                                        \
   template <>                                                               \
-  void AxpyDynamic<T, CPUContext>(                                          \
-      const int N,                                                          \
-      const T alpha,                                                        \
-      const T* x,                                                           \
-      T* Y,                                                                 \
-      CPUContext* context) {                                                \
+  void Axpy<T, CPUContext>(                                                 \
+      const int N, const T alpha, const T* x, T* Y, CPUContext* context) {  \
     EigenVectorMap<T>(Y, N) += ConstEigenVectorMap<T>(x, N) * alpha;        \
-  }                                                                         \
   }                                                                         \
   template <>                                                               \
   void Axpy<T, CPUContext>(                                                 \
@@ -311,18 +299,12 @@ void Gemv<float, CPUContext>(
 }
 
 #define CAFFE2_SPECIALIZED_SCALE(T, prefix)                                 \
-  namespace detail {                                                       \
   template <>                                                               \
-  void ScaleDynamic<T, CPUContext>(                                         \
-      const int n,                                                          \
-      const T alpha,                                                        \
-      const T* x,                                                           \
-      T* y,                                                                 \
-      CPUContext* context) {                                                \
+  void Scale<T, CPUContext>(                                                \
+      const int n, const T alpha, const T* x, T* y, CPUContext* context) {  \
     if (y != x)                                                             \
       cblas_##prefix##copy(n, x, 1, y, 1);                                  \
     cblas_##prefix##scal(n, alpha, y, 1);                                   \
-  }                                                                         \
   }                                                                         \
   template <>                                                               \
   void Scale<T, CPUContext>(                                                \
@@ -347,16 +329,10 @@ CAFFE2_SPECIALIZED_DOT(double, d)
 #undef CAFFE2_SPECIALIZED_DOT
 
 #define CAFFE2_SPECIALIZED_AXPY(T, prefix)                                  \
-  namespace detail {                                                        \
   template <>                                                               \
-  void AxpyDynamic<T, CPUContext>(                                          \
-      const int N,                                                          \
-      const T alpha,                                                        \
-      const T* x,                                                           \
-      T* y,                                                                 \
-      CPUContext* context) {                                                \
+  void Axpy<T, CPUContext>(                                                 \
+      const int N, const T alpha, const T* x, T* y, CPUContext* context) {  \
     cblas_##prefix##axpy(N, alpha, x, 1, y, 1);                             \
-  }                                                                         \
   }                                                                         \
   template <>                                                               \
   void Axpy<T, CPUContext>(                                                 \

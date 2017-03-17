@@ -29,7 +29,7 @@ class Workspace;
 class NetBase {
  public:
   NetBase(const NetDef& net_def, Workspace* ws);
-  virtual ~NetBase() {}
+  virtual ~NetBase() noexcept {}
   virtual bool Run() = 0;
 
   // RunAsync runs the net on the current stream, but potentially does
@@ -60,6 +60,10 @@ class NetBase {
 
   inline const vector<string>& external_input() const {
     return external_input_;
+  }
+
+  std::string name() const {
+    return name_;
   }
 
  protected:

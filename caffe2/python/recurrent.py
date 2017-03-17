@@ -4,9 +4,15 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 from caffe2.python import core
+from caffe2.python.scope import CurrentNameScope
 from caffe2.python.cnn import CNNModelHelper
-from caffe2.python.attention import apply_regular_attention
+from caffe2.python.attention import (
+    apply_regular_attention,
+    apply_recurrent_attention,
+    AttentionType,
+)
 
+_workspace_seq = 0
 
 def recurrent_net(
         net, cell_net, inputs, initial_cell_inputs,
@@ -41,6 +47,14 @@ def recurrent_net(
     '''
     assert len(inputs) == 1, "Only one input blob is supported so far"
 
+    # Validate scoping
+    for einp in cell_net.Proto().external_input:
+        assert einp.startswith(CurrentNameScope()), \
+            '''
+            Cell net external inputs are not properly scoped, use
+            AddScopedExternalInputs() when creating them
+            '''
+
     input_blobs = [str(i[0]) for i in inputs]
     initial_input_blobs = [str(x[1]) for x in initial_cell_inputs]
     op_name = net.NextName('recurrent')
@@ -58,7 +72,7 @@ def recurrent_net(
     if timestep is not None:
         known_inputs.append(str(timestep))
     references = [
-        b for b in cell_net.Proto().external_input
+        core.BlobReference(b) for b in cell_net.Proto().external_input
         if b not in known_inputs]
 
     inner_outputs = list(cell_net.Proto().external_output)
@@ -159,9 +173,10 @@ def recurrent_net(
     params = [x for x in references if x in backward_mapping.keys()]
     recurrent_inputs = [str(x[1]) for x in initial_cell_inputs]
 
+    global _workspace_seq
     results = net.RecurrentNetwork(
         all_inputs,
-        all_outputs + [s("step_workspaces")],
+        all_outputs + [s("step_workspaces_{}".format(_workspace_seq))],
         param=map(all_inputs.index, params),
         alias_src=alias_src,
         alias_dst=map(str, alias_dst),
@@ -179,6 +194,7 @@ def recurrent_net(
         timestep="timestep" if timestep is None else str(timestep),
         outputs_with_grads=outputs_with_grads,
     )
+    _workspace_seq += 1
     # The last output is a list of step workspaces,
     # which is only needed internally for gradient propogation
     return results[:-1]
@@ -219,7 +235,7 @@ def LSTM(model, input_blob, seq_lengths, initial_states, dim_in, dim_out,
     """ the step net """
     step_model = CNNModelHelper(name='lstm_cell', param_model=model)
     input_t, timestep, cell_t_prev, hidden_t_prev = (
-        step_model.net.AddExternalInputs(
+        step_model.net.AddScopedExternalInputs(
             'input_t', 'timestep', 'cell_t_prev', 'hidden_t_prev'))
     gates_t = step_model.FC(
         hidden_t_prev, s('gates_t'), dim_in=dim_out,
@@ -265,6 +281,7 @@ def LSTMWithAttention(
     decoder_state_dim,
     batch_size,
     scope,
+    attention_type=AttentionType.Regular,
     outputs_with_grads=(0, 4),
     weighted_encoder_outputs=None,
 ):
@@ -304,6 +321,9 @@ def LSTMWithAttention(
     decoder_state_dim: size of hidden states of LSTM
 
     batch_size: batch size
+
+    attention_type: One of: AttentionType.Regular, AttentionType.Recurrent.
+    Determines which type of attention mechanism to use.
 
     outputs_with_grads : position indices of output blobs which will receive
     external error gradient during backpropagation
@@ -350,20 +370,21 @@ def LSTMWithAttention(
         timestep,
         cell_t_prev,
         hidden_t_prev,
-        _,
-        _,
         attention_weighted_encoder_context_t_prev,
     ) = (
-        step_model.net.AddExternalInputs(
+        step_model.net.AddScopedExternalInputs(
             'input_t',
             'timestep',
             'cell_t_prev',
             'hidden_t_prev',
-            encoder_outputs_transposed,
-            weighted_encoder_outputs,
             'attention_weighted_encoder_context_t_prev',
         )
     )
+    step_model.net.AddExternalInputs(
+        encoder_outputs_transposed,
+        weighted_encoder_outputs
+    )
+
     gates_concatenated_input_t, _ = step_model.net.Concat(
         [hidden_t_prev, attention_weighted_encoder_context_t_prev],
         [
@@ -385,16 +406,29 @@ def LSTMWithAttention(
         [hidden_t_prev, cell_t_prev, gates_t, decoder_input_lengths, timestep],
         ['hidden_t_intermediate', s('cell_t')],
     )
-    attention_weighted_encoder_context_t = apply_regular_attention(
-        model=step_model,
-        encoder_output_dim=encoder_output_dim,
-        encoder_outputs_transposed=encoder_outputs_transposed,
-        weighted_encoder_outputs=weighted_encoder_outputs,
-        decoder_hidden_state_t=hidden_t_intermediate,
-        decoder_hidden_state_dim=decoder_state_dim,
-        batch_size=batch_size,
-        scope=scope,
-    )
+    if attention_type == AttentionType.Recurrent:
+        attention_weighted_encoder_context_t = apply_recurrent_attention(
+            model=step_model,
+            encoder_output_dim=encoder_output_dim,
+            encoder_outputs_transposed=encoder_outputs_transposed,
+            weighted_encoder_outputs=weighted_encoder_outputs,
+            decoder_hidden_state_t=hidden_t_intermediate,
+            decoder_hidden_state_dim=decoder_state_dim,
+            scope=scope,
+            attention_weighted_encoder_context_t_prev=(
+                attention_weighted_encoder_context_t_prev
+            ),
+        )
+    else:
+        attention_weighted_encoder_context_t = apply_regular_attention(
+            model=step_model,
+            encoder_output_dim=encoder_output_dim,
+            encoder_outputs_transposed=encoder_outputs_transposed,
+            weighted_encoder_outputs=weighted_encoder_outputs,
+            decoder_hidden_state_t=hidden_t_intermediate,
+            decoder_hidden_state_dim=decoder_state_dim,
+            scope=scope,
+        )
     hidden_t = step_model.Copy(hidden_t_intermediate, s('hidden_t'))
     step_model.net.AddExternalOutputs(
         cell_t,
@@ -427,3 +461,160 @@ def LSTMWithAttention(
         scope=scope,
         outputs_with_grads=outputs_with_grads,
     )
+
+
+def MILSTM(model, input_blob, seq_lengths, initial_states, dim_in, dim_out,
+           scope, outputs_with_grads=(0,)):
+    '''
+    Adds MI flavor of standard LSTM recurrent network operator to a model.
+    See https://arxiv.org/pdf/1606.06630.pdf
+
+    model: CNNModelHelper object new operators would be added to
+
+    input_blob: the input sequence in a format T x N x D
+    where T is sequence size, N - batch size and D - input dimention
+
+    seq_lengths: blob containing sequence lengths which would be passed to
+    LSTMUnit operator
+
+    initial_states: a tupple of (hidden_input_blob, cell_input_blob)
+    which are going to be inputs to the cell net on the first iteration
+
+    dim_in: input dimention
+
+    dim_out: output dimention
+
+    outputs_with_grads : position indices of output blobs which will receive
+    external error gradient during backpropagation
+    '''
+    def s(name):
+        # We have to manually scope due to our internal/external blob
+        # relationships.
+        return "{}/{}".format(str(scope), str(name))
+
+    """ initial bulk fully-connected """
+    input_blob = model.FC(
+        input_blob, s('i2h'), dim_in=dim_in, dim_out=4 * dim_out, axis=2)
+
+    """ the step net """
+    step_model = CNNModelHelper(name='milstm_cell', param_model=model)
+    input_t, timestep, cell_t_prev, hidden_t_prev = (
+        step_model.net.AddScopedExternalInputs(
+            'input_t', 'timestep', 'cell_t_prev', 'hidden_t_prev'))
+    # hU^T
+    # Shape: [1, batch_size, 4 * hidden_size]
+    prev_t = step_model.FC(
+        hidden_t_prev, s('prev_t'), dim_in=dim_out,
+        dim_out=4 * dim_out, axis=2)
+    # defining MI parameters
+    alpha = step_model.param_init_net.ConstantFill(
+        [],
+        [s('alpha')],
+        shape=[4 * dim_out],
+        value=1.0
+    )
+    beta1 = step_model.param_init_net.ConstantFill(
+        [],
+        [s('beta1')],
+        shape=[4 * dim_out],
+        value=1.0
+    )
+    beta2 = step_model.param_init_net.ConstantFill(
+        [],
+        [s('beta2')],
+        shape=[4 * dim_out],
+        value=1.0
+    )
+    b = step_model.param_init_net.ConstantFill(
+        [],
+        [s('b')],
+        shape=[4 * dim_out],
+        value=0.0
+    )
+    # alpha * (xW^T * hU^T)
+    # Shape: [1, batch_size, 4 * hidden_size]
+    alpha_tdash = step_model.net.Mul(
+        [prev_t, input_t],
+        s('alpha_tdash')
+    )
+    # Shape: [batch_size, 4 * hidden_size]
+    alpha_tdash_rs, _ = step_model.net.Reshape(
+        alpha_tdash,
+        [s('alpha_tdash_rs'), s('alpha_tdash_old_shape')],
+        shape=[-1, 4 * dim_out],
+    )
+    alpha_t = step_model.net.Mul(
+        [alpha_tdash_rs, alpha],
+        s('alpha_t'),
+        broadcast=1,
+        use_grad_hack=1
+    )
+    # beta1 * hU^T
+    # Shape: [batch_size, 4 * hidden_size]
+    prev_t_rs, _ = step_model.net.Reshape(
+        prev_t,
+        [s('prev_t_rs'), s('prev_t_old_shape')],
+        shape=[-1, 4 * dim_out],
+    )
+    beta1_t = step_model.net.Mul(
+        [prev_t_rs, beta1],
+        s('beta1_t'),
+        broadcast=1,
+        use_grad_hack=1
+    )
+    # beta2 * xW^T
+    # Shape: [batch_szie, 4 * hidden_size]
+    input_t_rs, _ = step_model.net.Reshape(
+        input_t,
+        [s('input_t_rs'), s('input_t_old_shape')],
+        shape=[-1, 4 * dim_out],
+    )
+    beta2_t = step_model.net.Mul(
+        [input_t_rs, beta2],
+        s('beta2_t'),
+        broadcast=1,
+        use_grad_hack=1
+    )
+    # Add 'em all up
+    gates_tdash = step_model.net.Sum(
+        [alpha_t, beta1_t, beta2_t],
+        s('gates_tdash')
+    )
+    gates_t = step_model.net.Add(
+        [gates_tdash, b],
+        s('gates_t'),
+        broadcast=1,
+        use_grad_hack=1
+    )
+    # # Shape: [1, batch_size, 4 * hidden_size]
+    gates_t_rs, _ = step_model.net.Reshape(
+        gates_t,
+        [s('gates_t_rs'), s('gates_t_old_shape')],
+        shape=[1, -1, 4 * dim_out],
+    )
+
+    hidden_t, cell_t = step_model.net.LSTMUnit(
+        [hidden_t_prev, cell_t_prev, gates_t_rs, seq_lengths, timestep],
+        [s('hidden_t'), s('cell_t')],
+    )
+    step_model.net.AddExternalOutputs(cell_t, hidden_t)
+
+    """ recurrent network """
+    (hidden_input_blob, cell_input_blob) = initial_states
+    output, last_output, all_states, last_state = recurrent_net(
+        net=model.net,
+        cell_net=step_model.net,
+        inputs=[(input_t, input_blob)],
+        initial_cell_inputs=[
+            (hidden_t_prev, hidden_input_blob),
+            (cell_t_prev, cell_input_blob),
+        ],
+        links={
+            hidden_t_prev: hidden_t,
+            cell_t_prev: cell_t,
+        },
+        timestep=timestep,
+        scope=scope,
+        outputs_with_grads=outputs_with_grads,
+    )
+    return output, last_output, all_states, last_state

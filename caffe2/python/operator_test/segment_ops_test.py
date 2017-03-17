@@ -37,7 +37,7 @@ class TesterBase:
         ]
         return self.unsplit(data.shape[1:], segment_grads, segment_ids)
 
-    def test(self, prefix, input_strategy, refs, **kwargs):
+    def _test(self, prefix, input_strategy, refs, **kwargs):
         tester = self
         operator_args = kwargs.pop('operator_args', {})
         threshold = kwargs.pop('threshold', 1e-4)
@@ -119,7 +119,7 @@ class SegmentsTester(TesterBase):
                 dtype=data.dtype
             ) for seg_id in range(0, K)
         ]
-        counts = np.zeros(K)
+        counts = np.zeros(K, dtype=int)
         for i, seg_id in enumerate(segment_ids):
             data_idx = i if indices is None else indices[i]
             outputs[seg_id][counts[seg_id]] = data[data_idx]
@@ -132,7 +132,7 @@ class SegmentsTester(TesterBase):
         if len(segment_ids) == 0:
             return output
         K = max(segment_ids) + 1
-        counts = np.zeros(K)
+        counts = np.zeros(K, dtype=int)
         for i, seg_id in enumerate(segment_ids):
             output[i] = inputs[seg_id][counts[seg_id]]
             counts[seg_id] += 1
@@ -247,7 +247,7 @@ REFERENCES_SORTED = [
 
 class TestSegmentOps(hu.HypothesisTestCase):
     def test_sorted_segment_ops(self):
-        SegmentsTester().test(
+        SegmentsTester()._test(
             'SortedSegment',
             hu.segmented_tensor(
                 dtype=np.float32,
@@ -258,7 +258,7 @@ class TestSegmentOps(hu.HypothesisTestCase):
         )(self)
 
     def test_unsorted_segment_ops(self):
-        SegmentsTester().test(
+        SegmentsTester()._test(
             'UnsortedSegment',
             hu.segmented_tensor(
                 dtype=np.float32,
@@ -269,7 +269,7 @@ class TestSegmentOps(hu.HypothesisTestCase):
         )(self)
 
     def test_sparse_sorted_segment_ops(self):
-        SegmentsTester().test(
+        SegmentsTester()._test(
             'SparseSortedSegment',
             hu.sparse_segmented_tensor(
                 dtype=np.float32,
@@ -280,7 +280,7 @@ class TestSegmentOps(hu.HypothesisTestCase):
         )(self)
 
     def test_sparse_unsorted_segment_ops(self):
-        SegmentsTester().test(
+        SegmentsTester()._test(
             'SparseUnsortedSegment',
             hu.sparse_segmented_tensor(
                 dtype=np.float32,
@@ -291,7 +291,7 @@ class TestSegmentOps(hu.HypothesisTestCase):
         )(self)
 
     def test_lengths_ops(self):
-        LengthsTester().test(
+        LengthsTester()._test(
             'Lengths',
             hu.lengths_tensor(
                 dtype=np.float32,
@@ -303,7 +303,7 @@ class TestSegmentOps(hu.HypothesisTestCase):
         )(self)
 
     def test_sparse_lengths_ops(self):
-        LengthsTester().test(
+        LengthsTester()._test(
             'SparseLengths',
             hu.sparse_lengths_tensor(
                 dtype=np.float32,

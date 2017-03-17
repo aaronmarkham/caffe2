@@ -4,10 +4,15 @@ from __future__ import print_function
 from __future__ import unicode_literals
 import numpy as np
 from caffe2.python import core, workspace, cnn
-from caffe2.python.sgd import build_sgd
 
 
-class TestBase(object):
+class OptimizerTestBase(object):
+    """
+    This is an abstract base class.
+    Don't inherit from unittest.TestCase, and don't name it 'Test*'.
+    Do, however, do these things in classes which inherit from this.
+    """
+
     def testDense(self):
         perfect_model = np.array([2, 6, 5, 0, 1]).astype(np.float32)
         np.random.seed(123)  # make test deterministic
@@ -25,7 +30,6 @@ class TestBase(object):
         loss = model.AveragedLoss(sq, "avg_loss")
         grad_map = model.AddGradientOperators([loss])
         self.assertIsInstance(grad_map['fc_w'], core.BlobReference)
-        build_sgd(model, base_learning_rate=0.1)
         self.build_optimizer(model)
 
         workspace.FeedBlob('data', data[0])
