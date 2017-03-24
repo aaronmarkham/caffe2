@@ -3,8 +3,6 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-from caffe2.python import core
-
 
 class AttentionType:
     Regular, Recurrent = range(2)
@@ -37,7 +35,7 @@ def _calc_weighted_context(
             attention_weighted_encoder_context,
             s(scope, 'attention_weighted_encoder_context_old_shape')
         ],
-        shape=[-1, encoder_output_dim],
+        shape=[1, -1, encoder_output_dim],
     )
     return attention_weighted_encoder_context
 
@@ -77,67 +75,32 @@ def _calc_attention_logits_from_sum_match(
         decoder_hidden_encoder_outputs_sum,
         decoder_hidden_encoder_outputs_sum,
     )
-    # [encoder_length * batch_size, encoder_output_dim]
-    decoder_hidden_encoder_outputs_sum_tanh_2d, _ = model.net.Reshape(
-        decoder_hidden_encoder_outputs_sum,
-        [
-            s(scope, 'decoder_hidden_encoder_outputs_sum_tanh_2d'),
-            s(scope, 'decoder_hidden_encoder_outputs_sum_tanh_t_old_shape'),
-        ],
-        shape=[-1, encoder_output_dim],
-    )
 
     attention_v = model.param_init_net.XavierFill(
         [],
         s(scope, 'attention_v'),
-        shape=[encoder_output_dim, 1],
+        shape=[1, encoder_output_dim],
     )
     model.add_param(attention_v)
 
-    # [encoder_length * batch_size, 1]
-    attention_logits = model.net.MatMul(
-        [decoder_hidden_encoder_outputs_sum_tanh_2d, attention_v],
-        s(scope, 'attention_logits'),
-    )
-
-    # Retrieve output shape
-    decoder_hidden_encoder_outputs_sum_shape = model.net.Shape(
-        decoder_hidden_encoder_outputs_sum,
-        s(scope, 'decoder_hidden_encoder_outputs_sum_shape')
-    )
-
-    slice_start = model.param_init_net.ConstantFill(
+    attention_zeros = model.param_init_net.ConstantFill(
         [],
-        s(scope, 'slice_start'),
+        s(scope, 'attention_zeros'),
+        value=0.0,
         shape=[1],
-        value=0,
-        dtype=core.DataType.INT32,
     )
 
-    slice_end = model.param_init_net.ConstantFill(
-        [],
-        s(scope, 'slice_end'),
-        shape=[1],
-        value=2,
-        dtype=core.DataType.INT32,
+    # [encoder_length, batch_size, 1]
+    attention_logits = model.net.FC(
+        [decoder_hidden_encoder_outputs_sum, attention_v, attention_zeros],
+        [s(scope, 'attention_logits')],
+        axis=2
     )
-
-    encoder_length_by_batch_size_shape = model.net.Slice(
-        [
-            decoder_hidden_encoder_outputs_sum_shape,
-            slice_start,
-            slice_end
-        ],
-        s(scope, 'encoder_length_by_batch_size_shape')
-    )
-
     # [encoder_length, batch_size]
-    attention_logits, _ = model.net.Reshape(
-        [attention_logits, encoder_length_by_batch_size_shape],
-        [
-            attention_logits,
-            s(scope, 'attention_logits_old_shape'),
-        ],
+    attention_logits = model.net.Squeeze(
+        [attention_logits],
+        [attention_logits],
+        dims=[2],
     )
     # [batch_size, encoder_length]
     attention_logits_transposed = model.net.Transpose(
@@ -201,16 +164,10 @@ def apply_recurrent_attention(
         name='weighted_decoder_hidden_state'
     )
 
-    # TODO: remove that excessive when RecurrentNetwork supports
-    # Sum op at the beginning of step_net
-    weighted_encoder_outputs_copy = model.net.Copy(
-        weighted_encoder_outputs,
-        s(scope, 'weighted_encoder_outputs_copy'),
-    )
     # [encoder_length, batch_size, encoder_output_dim]
     decoder_hidden_encoder_outputs_sum_tmp = model.net.Add(
         [
-            weighted_encoder_outputs_copy,
+            weighted_encoder_outputs,
             weighted_decoder_hidden_state
         ],
         s(scope, 'decoder_hidden_encoder_outputs_sum_tmp'),
@@ -235,6 +192,7 @@ def apply_recurrent_attention(
         scope=scope
     )
 
+    # [batch_size, encoder_length, 1]
     attention_weights_3d = _calc_attention_weights(
         model=model,
         attention_logits_transposed=attention_logits_transposed,
@@ -249,7 +207,7 @@ def apply_recurrent_attention(
         attention_weights_3d=attention_weights_3d,
         scope=scope
     )
-    return attention_weighted_encoder_context
+    return attention_weighted_encoder_context, attention_weights_3d
 
 
 def apply_regular_attention(
@@ -270,15 +228,9 @@ def apply_regular_attention(
         name='weighted_decoder_hidden_state'
     )
 
-    # TODO: remove that excessive when RecurrentNetwork supports
-    # Sum op at the beginning of step_net
-    weighted_encoder_outputs_copy = model.net.Copy(
-        weighted_encoder_outputs,
-        s(scope, 'weighted_encoder_outputs_copy'),
-    )
     # [encoder_length, batch_size, encoder_output_dim]
     decoder_hidden_encoder_outputs_sum = model.net.Add(
-        [weighted_encoder_outputs_copy, weighted_decoder_hidden_state],
+        [weighted_encoder_outputs, weighted_decoder_hidden_state],
         s(scope, 'decoder_hidden_encoder_outputs_sum'),
         broadcast=1,
         use_grad_hack=1,
@@ -291,6 +243,7 @@ def apply_regular_attention(
         scope=scope
     )
 
+    # [batch_size, encoder_length, 1]
     attention_weights_3d = _calc_attention_weights(
         model=model,
         attention_logits_transposed=attention_logits_transposed,
@@ -305,4 +258,4 @@ def apply_regular_attention(
         attention_weights_3d=attention_weights_3d,
         scope=scope
     )
-    return attention_weighted_encoder_context
+    return attention_weighted_encoder_context, attention_weights_3d

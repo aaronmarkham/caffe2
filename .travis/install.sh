@@ -31,8 +31,11 @@ elif [[ $TRAVIS_OS_NAME == 'osx' ]]; then
   # Install dependencies #
   ########################
 
-  brew install glog automake protobuf leveldb lmdb
+  brew install glog automake protobuf leveldb lmdb ninja
   sudo pip install numpy
+  # Dependencies needed for NNPACK: PeachPy and confu
+  sudo pip install --upgrade git+https://github.com/Maratyszcza/PeachPy
+  sudo pip install --upgrade git+https://github.com/Maratyszcza/confu
 
 else
 #********************#
@@ -45,8 +48,19 @@ else
   sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
   sudo apt-get update
   sudo apt-get install libprotobuf-dev protobuf-compiler libatlas-base-dev libgoogle-glog-dev liblmdb-dev libleveldb-dev libsnappy-dev python-dev python-pip libiomp-dev libopencv-dev libpthread-stubs0-dev
+  # Dependency needed for NNPACK: the most recent version of ninja build
+  git clone https://github.com/ninja-build/ninja.git /tmp/ninja
+  pushd /tmp/ninja
+  git checkout release
+  python configure.py --bootstrap
+  mkdir -p $HOME/.local/bin
+  install -m 755 /tmp/ninja/ninja $HOME/.local/bin/ninja
+  popd
+  export PATH=$HOME/.local/bin:$PATH
+  # Dependencies needed for NNPACK: PeachPy and confu
+  pip install --upgrade git+https://github.com/Maratyszcza/PeachPy
+  pip install --upgrade git+https://github.com/Maratyszcza/confu
   pip install numpy
-
 
   #########################
   # Install MKL if needed #
@@ -65,24 +79,31 @@ else
   # Install CUDA #
   ################
 
-  CUDA_REPO_PKG="cuda-repo-ubuntu1404_8.0.44-1_amd64.deb"
+  source /etc/lsb-release
+
+  REPO="ubuntu1404"
+  if [ "${DISTRIB_RELEASE}" == "16.04" ]; then
+      REPO="ubuntu1604"
+  fi
+
+  CUDA_REPO_PKG="cuda-repo-${REPO}_8.0.44-1_amd64.deb"
   CUDA_PKG_VERSION="8-0"
   CUDA_VERSION="8.0"
 
-  wget http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1404/x86_64/$CUDA_REPO_PKG
-  sudo dpkg -i $CUDA_REPO_PKG
-  rm $CUDA_REPO_PKG
+  wget "http://developer.download.nvidia.com/compute/cuda/repos/${REPO}/x86_64/${CUDA_REPO_PKG}"
+  sudo dpkg -i "${CUDA_REPO_PKG}"
+  rm -f "${CUDA_REPO_PKG}"
   sudo apt-get update
   sudo apt-get install -y --no-install-recommends \
-      cuda-core-$CUDA_PKG_VERSION \
-      cuda-cublas-dev-$CUDA_PKG_VERSION \
-      cuda-cudart-dev-$CUDA_PKG_VERSION \
-      cuda-curand-dev-$CUDA_PKG_VERSION \
-      cuda-driver-dev-$CUDA_PKG_VERSION \
-      cuda-nvrtc-dev-$CUDA_PKG_VERSION
+      "cuda-core-${CUDA_PKG_VERSION}" \
+      "cuda-cublas-dev-${CUDA_PKG_VERSION}" \
+      "cuda-cudart-dev-${CUDA_PKG_VERSION}" \
+      "cuda-curand-dev-${CUDA_PKG_VERSION}" \
+      "cuda-driver-dev-${CUDA_PKG_VERSION}" \
+      "cuda-nvrtc-dev-${CUDA_PKG_VERSION}"
 
   # manually create CUDA symlink
-  sudo ln -s /usr/local/cuda-$CUDA_VERSION /usr/local/cuda
+  sudo ln -sf /usr/local/cuda-$CUDA_VERSION /usr/local/cuda
 
   #################
   # Install cudnn #

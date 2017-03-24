@@ -207,17 +207,17 @@ class MKLMemory {
       dims_[i] = dims[i];
     }
     size_t dimension = dims.size();
-    size_t size[dimension];
-    size_t strides[dimension];
+    vector<size_t> size(dimension);
+    vector<size_t> strides(dimension);
     for (int i = 0; i < dimension; ++i) {
       size[i] = dims[dimension - i - 1];
       strides[i] = (i == 0) ? 1 : strides[i - 1] * size[i - 1];
     }
-    user_layout_.Reset(dims.size(), size, strides);
+    user_layout_.Reset(dims.size(), size.data(), strides.data());
     if (primitive) {
       layout_.Reset(primitive, type);
     } else {
-      layout_.Reset(dimension, size, strides);
+      layout_.Reset(dimension, size.data(), strides.data());
     }
     convert_in_.Reset(dnnConversionCreate<T>, user_layout_, layout_);
     convert_out_.Reset(dnnConversionCreate<T>, layout_, user_layout_);
@@ -310,7 +310,7 @@ class MKLMemory {
   }
 
   void CopyTo(TensorCPU* tensor) const {
-    if (buffer_.get() == tensor->mutable_data<T>()) {
+    if (tensor->size() > 0 && buffer_.get() == tensor->mutable_data<T>()) {
       // This is already mapping to the same memory region. Skip copy.
       VLOG(2) << "CopyTo does not need actual copying, as we are sharing "
                  "memory with the output.";
@@ -383,7 +383,7 @@ class MKLMemory {
   }
 
   inline const int ndim() const { return dims_.size(); }
-  
+
   inline int dim32(const int i) const {
     CAFFE_ENFORCE_LT(dims_.at(i), std::numeric_limits<int>::max());
     return static_cast<int>(dims_[i]);

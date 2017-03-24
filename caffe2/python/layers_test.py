@@ -32,6 +32,9 @@ class TestLayers(test_util.TestCase):
             input_feature_schema=input_feature_schema,
             trainer_extra_schema=trainer_extra_schema)
 
+    def new_record(self, schema_obj):
+        return schema.NewRecord(self.model.net, schema_obj)
+
     def get_training_nets(self):
         """
         We don't use
@@ -106,6 +109,25 @@ class TestLayers(test_util.TestCase):
 
         predict_net = self.get_predict_net()
         self.assertNetContainOps(predict_net, [mat_mul_spec])
+
+    def testBatchSigmoidCrossEntropyLoss(self):
+        input_record = self.new_record(schema.Struct(
+            ('label', schema.Scalar((np.float32, (32,)))),
+            ('prediction', schema.Scalar((np.float32, (32,))))
+        ))
+        loss = self.model.BatchSigmoidCrossEntropyLoss(input_record)
+        self.assertEqual(schema.Scalar((np.float32, tuple())), loss)
+
+    def testBatchSoftmaxLoss(self):
+        input_record = self.new_record(schema.Struct(
+            ('label', schema.Scalar((np.float32, tuple()))),
+            ('prediction', schema.Scalar((np.float32, (32,))))
+        ))
+        loss = self.model.BatchSoftmaxLoss(input_record)
+        self.assertEqual(schema.Struct(
+            ('softmax', schema.Scalar((np.float32, (32,)))),
+            ('loss', schema.Scalar(np.float32)),
+        ), loss)
 
     def testFunctionalLayer(self):
         def normalize(net, in_record, out_record):
@@ -185,3 +207,17 @@ class TestLayers(test_util.TestCase):
         self.assertEqual(1, len(loss.field_types()))
         self.assertEqual(np.float32, loss.field_types()[0].base)
         self.assertEqual(tuple(), loss.field_types()[0].shape)
+
+    def testFunctionalLayerWithOutputNames(self):
+        k = 3
+        topk = self.model.TopK(
+            self.model.input_feature_schema,
+            output_names_or_num=['values', 'indices'],
+            k=k,
+        )
+        self.assertEqual(2, len(topk.field_types()))
+        self.assertEqual(np.float32, topk.field_types()[0].base)
+        self.assertEqual((k,), topk.field_types()[0].shape)
+        self.assertEqual(np.int32, topk.field_types()[1].base)
+        self.assertEqual((k,), topk.field_types()[1].shape)
+        self.assertEqual(['TopK/values', 'TopK/indices'], topk.field_blobs())

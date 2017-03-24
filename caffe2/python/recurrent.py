@@ -82,15 +82,15 @@ def recurrent_net(
     # compute the backward pass of the cell net
     backward_ops, backward_mapping = core.GradientRegistry.GetBackwardPass(
         cell_net.Proto().op, inner_outputs_map)
-    backward_mapping = {str(k): str(v) for k, v in backward_mapping.items()}
+    backward_mapping = {str(k): v for k, v in backward_mapping.items()}
     backward_cell_net = core.Net("RecurrentBackwardStep")
 
     del backward_cell_net.Proto().op[:]
     backward_cell_net.Proto().op.extend(backward_ops)
-
     # compute blobs used but not defined in the backward pass
-    ssa, _ = core.get_ssa(backward_cell_net.Proto())
-    undefined = core.get_undefined_blobs(ssa)
+    backward_ssa, backward_blob_versions = core.get_ssa(
+        backward_cell_net.Proto())
+    undefined = core.get_undefined_blobs(backward_ssa)
 
     # also add to the output list the intermediate outputs of fwd_step that
     # are used by backward.
@@ -146,6 +146,22 @@ def recurrent_net(
         all_outputs.extend([cell_output + "_all", cell_output + "_last"])
 
         recurrent_states.append(state)
+
+        recurrent_input_grad = cell_input + "_grad"
+        if not backward_blob_versions.get(recurrent_input_grad, 0):
+            # If nobody writes to this recurrent input gradient, we need
+            # to perform a munual copy. This is a case if SumOp is being
+            # used as first operator of the cell net
+            backward_cell_net.Copy(
+                backward_mapping[cell_input], recurrent_input_grad)
+    # Similarly, we need to copy over gradient values for the parameters that
+    # are added as ExternalInputs (excluding timestep) to the step net
+    for reference in references:
+        reference_grad = reference + "_grad"
+        if (reference in backward_mapping and
+                reference_grad != str(backward_mapping[reference])):
+            backward_cell_net.Copy(
+                backward_mapping[reference], reference_grad)
 
     for input_t, input_blob in inputs:
         forward_links.append((str(input_t), str(input_blob), 0))
@@ -279,7 +295,6 @@ def LSTMWithAttention(
     encoder_outputs,
     decoder_input_dim,
     decoder_state_dim,
-    batch_size,
     scope,
     attention_type=AttentionType.Regular,
     outputs_with_grads=(0, 4),
@@ -319,8 +334,6 @@ def LSTMWithAttention(
     decoder_input_dim: input dimention (last dimension on decoder_inputs)
 
     decoder_state_dim: size of hidden states of LSTM
-
-    batch_size: batch size
 
     attention_type: One of: AttentionType.Regular, AttentionType.Recurrent.
     Determines which type of attention mechanism to use.
@@ -407,7 +420,7 @@ def LSTMWithAttention(
         ['hidden_t_intermediate', s('cell_t')],
     )
     if attention_type == AttentionType.Recurrent:
-        attention_weighted_encoder_context_t = apply_recurrent_attention(
+        attention_weighted_encoder_context_t, _ = apply_recurrent_attention(
             model=step_model,
             encoder_output_dim=encoder_output_dim,
             encoder_outputs_transposed=encoder_outputs_transposed,
@@ -420,7 +433,7 @@ def LSTMWithAttention(
             ),
         )
     else:
-        attention_weighted_encoder_context_t = apply_regular_attention(
+        attention_weighted_encoder_context_t, _ = apply_regular_attention(
             model=step_model,
             encoder_output_dim=encoder_output_dim,
             encoder_outputs_transposed=encoder_outputs_transposed,
