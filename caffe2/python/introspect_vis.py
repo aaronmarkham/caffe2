@@ -1,3 +1,5 @@
+## @package introspect_vis
+# Module caffe2.python.introspect_vis
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
