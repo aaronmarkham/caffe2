@@ -98,3 +98,5 @@ defaults:
       path: ""
     values:
       image: /static/og_image.png
+
+theme: jekyll-theme-merlot
