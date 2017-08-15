@@ -31,7 +31,6 @@ enable_testing()
 # Note: if you add an option below, make sure you also add it to
 # cmake/Summary.cmake
 option(BUILD_BINARY "Build C++ binaries" ON)
-option(BUILD_DOCS "Build documentation" OFF)
 option(BUILD_PYTHON "Build Python binaries" ON)
 option(BUILD_SHARED_LIBS "Build libcaffe2.so" ON)
 option(BUILD_TEST "Build C++ test binaries (need gtest and gbenchmark)" ON)
